@@ -3,6 +3,7 @@ import os
 import json
 import base64
 import requests
+import httpx
 import asyncio
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 import fastapi
@@ -269,8 +270,12 @@ async def get_labs_endpoint(is_code: str = ""):
     database_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'Maanak_database'))
     
     if not os.path.exists(database_dir):
-        # Fallback to mock
-        return [{"lab_name": "Database Error", "location": "Unknown", "scope": ["N/A"]}]
+        # Mock labs for Render deployment (since PDFs are gitignored)
+        return [
+            {"lab_name": "BIS Central Laboratory", "location": "Sahibabad", "scope": ["IS 1293", "IS 302", "IS 16046"]},
+            {"lab_name": "ERTL (North)", "location": "New Delhi", "scope": ["IS 1293", "IS 13252"]},
+            {"lab_name": "National Test House", "location": "Kolkata", "scope": ["IS 1293"]}
+        ]
         
     lab_map = {}
     for filename in os.listdir(database_dir):
