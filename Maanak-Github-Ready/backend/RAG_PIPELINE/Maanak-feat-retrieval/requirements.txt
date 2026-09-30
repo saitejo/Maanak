@@ -8,3 +8,4 @@ pinecone-client
 openai
 sse-starlette
 scikit-learn
+gTTS

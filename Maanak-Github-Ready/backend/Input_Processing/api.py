@@ -97,15 +97,30 @@ def bhashini_translate(text: str, source_lang: str, target_lang: str) -> str:
         print(f"Translation error: {e}")
         return text
 
+def fallback_gtts(text: str, target_lang: str) -> str:
+    try:
+        import io
+        import base64
+        from gtts import gTTS
+        # gTTS uses 2-letter lang codes (e.g., 'en', 'hi')
+        tts = gTTS(text=text, lang=target_lang[:2])
+        fp = io.BytesIO()
+        tts.write_to_fp(fp)
+        fp.seek(0)
+        return base64.b64encode(fp.read()).decode('utf-8')
+    except Exception as e:
+        print(f"[gTTS] Error: {e}")
+        return ""
+
 def bhashini_tts(text: str, target_lang: str) -> str:
     """
     TTS Fallback logic:
     1. Tries Bhashini if BHASHINI_API_KEY is present.
-    2. Falls back to ElevenLabs if Bhashini fails or key is missing.
+    2. Falls back to ElevenLabs.
+    3. Falls back to Google TTS (gTTS) if others fail/missing.
     """
+    # 1. Try Bhashini
     bhashini_key = os.getenv("BHASHINI_API_KEY", "")
-    
-    # 1. Try Bhashini (tomorrow)
     if bhashini_key:
         try:
             # (Stubbed Bhashini TTS Request here)
@@ -113,27 +128,27 @@ def bhashini_tts(text: str, target_lang: str) -> str:
         except Exception as e:
             print(f"[Bhashini TTS] Failed, falling back to ElevenLabs: {e}")
             
-    # 2. Fallback to ElevenLabs
-    print(f"[Fallback TTS] Using ElevenLabs for voice...")
+    # 2. Try ElevenLabs
     elevenlabs_key = os.getenv("ELEVENLABS_API_KEY", "")
-    if not elevenlabs_key:
-        return ""
-        
-    try:
-        # Default voice ID for ElevenLabs (e.g., Rachel)
-        voice_id = "21m00Tcm4TlvDq8ikWAM" 
-        response = httpx.post(
-            f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
-            headers={"xi-api-key": elevenlabs_key, "Content-Type": "application/json"},
-            json={"text": text, "model_id": "eleven_multilingual_v2"},
-            timeout=15.0
-        )
-        response.raise_for_status()
-        import base64
-        return base64.b64encode(response.content).decode("utf-8")
-    except Exception as e:
-        print(f"ElevenLabs error: {e}")
-        return ""
+    if elevenlabs_key:
+        try:
+            print(f"[TTS] Trying ElevenLabs...")
+            voice_id = "21m00Tcm4TlvDq8ikWAM" 
+            response = httpx.post(
+                f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
+                headers={"xi-api-key": elevenlabs_key, "Content-Type": "application/json"},
+                json={"text": text, "model_id": "eleven_multilingual_v2"},
+                timeout=15.0
+            )
+            response.raise_for_status()
+            import base64
+            return base64.b64encode(response.content).decode("utf-8")
+        except Exception as e:
+            print(f"[ElevenLabs TTS] Failed ({e}), falling back to Google TTS.")
+
+    # 3. Fallback to Google TTS
+    print(f"[TTS] Using Google TTS (gTTS) fallback...")
+    return fallback_gtts(text, target_lang)
 
 import httpx
 
