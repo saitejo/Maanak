@@ -30,7 +30,7 @@ async def get_hf_embedding(text: str) -> list[float]:
         print("[Error] Missing HF_TOKEN for embeddings!")
         return []
     
-    url = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
+    url = "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction"
     headers = {"Authorization": f"Bearer {hf_token}"}
     
     def _sync_post():

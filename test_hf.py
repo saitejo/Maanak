@@ -1,6 +1,6 @@
-import asyncio
-import os
-import httpx
-from dotenv import load_dotenv
-
-load_dotenv("Maanak-Github-Ready/backend/.env") # Or wherever their env is. Actually I don't have their HF_TOKEN.
+from huggingface_hub import InferenceClient
+client = InferenceClient(token="") # NO TOKEN just to see if it initializes and attempts a call
+try:
+    print(client.feature_extraction("led lamp", model="sentence-transformers/all-MiniLM-L6-v2"))
+except Exception as e:
+    print("ERROR:", e)

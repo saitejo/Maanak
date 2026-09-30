@@ -9,3 +9,5 @@ openai
 sse-starlette
 scikit-learn
 gTTS
+gTTS
+requests
