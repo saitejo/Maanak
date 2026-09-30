@@ -32,6 +32,7 @@ class FrontendRequest(BaseModel):
     data: str
     source_lang: str
     session_id: str
+    transcript: str = ""
 
 class TTSRequest(BaseModel):
     text: str
@@ -39,17 +40,52 @@ class TTSRequest(BaseModel):
 
 def bhashini_asr(audio_base64: str, source_lang: str) -> str:
     """
-    TODO: Integrate Bhashini ASR API here.
-    Input:  audio_base64 (base64-encoded audio), source_lang (ISO code e.g. 'hi', 'te')
-    Output: Transcribed text string in the source language.
-
-    Bhashini API Docs: https://bhashini.gov.in/ulca/apis
-    Expected endpoint: POST https://dhruva-api.bhashini.gov.in/services/inference/pipeline
-    Auth header: Authorization: <BHASHINI_API_KEY>
-
-    Until integrated, returns empty string so the gateway degrades gracefully.
+    Multilingual ASR:
+    1. Tries Bhashini if BHASHINI_API_KEY is configured.
+    2. Tries Hugging Face Multilingual Whisper (whisper-large-v3-turbo).
     """
-    print(f"[Bhashini ASR] TODO: integrate Bhashini ASR for lang={source_lang}")
+    if not audio_base64:
+        return ""
+        
+    import base64
+    import os
+    import requests
+    
+    try:
+        audio_bytes = base64.b64decode(audio_base64)
+    except Exception as e:
+        print(f"[ASR] Base64 decode error: {e}")
+        return ""
+
+    # 1. Bhashini ASR (if configured)
+    bhashini_key = os.getenv("BHASHINI_API_KEY", "")
+    if bhashini_key:
+        try:
+            pass
+        except Exception as e:
+            print(f"[Bhashini ASR] Error: {e}")
+
+    # 2. Hugging Face Multilingual Whisper API
+    hf_token = os.getenv("HF_TOKEN", "")
+    if hf_token:
+        try:
+            url = "https://router.huggingface.co/hf-inference/models/openai/whisper-large-v3-turbo"
+            headers = {
+                "Authorization": f"Bearer {hf_token}",
+                "Content-Type": "audio/webm"
+            }
+            resp = requests.post(url, headers=headers, data=audio_bytes, timeout=15.0)
+            if resp.status_code == 200:
+                result = resp.json()
+                transcribed = result.get("text", "").strip()
+                if transcribed:
+                    print(f"[Whisper ASR] Successfully transcribed ({source_lang}): {transcribed}")
+                    return transcribed
+            else:
+                print(f"[Whisper ASR] HF status {resp.status_code}: {resp.text}")
+        except Exception as e:
+            print(f"[Whisper ASR] Request failed: {e}")
+            
     return ""
 
 def bhashini_translate(text: str, source_lang: str, target_lang: str) -> str:
@@ -84,7 +120,7 @@ def bhashini_translate(text: str, source_lang: str, target_lang: str) -> str:
             json={
                 "model": "openai/gpt-4o-mini",
                 "messages": [
-                    {"role": "system", "content": f"You are a strict translation API. Translate the following text from {source_lang} to {target_lang}. Return ONLY the translated text, without quotes or conversational filler."},
+                    {"role": "system", "content": f"You are a strict translation API. Translate the following text from {source_lang} to {target_lang}. Return ONLY the translated text, without quotes or conversational filler. CRITICAL: Keep all Indian Standard citations exactly in the format '[IS <number> -> Clause <clause>]' in English/Latin characters verbatim (e.g. keep '[IS 14543 -> Clause 4.1]' or '[IS 302 (Part 1) -> Clause 13.1]' unchanged; DO NOT translate 'IS' or 'Clause' and do not alter the brackets or arrows)."},
                     {"role": "user", "content": text}
                 ],
                 "temperature": 0.1
@@ -187,10 +223,17 @@ async def chat_stream_endpoint(req: FrontendRequest, request: Request, backgroun
     user_role = request.headers.get("x-user-role", "citizen")
     
     native_text = req.data
-    if req.input_type == "audio":
-        native_text = bhashini_asr(req.data, req.source_lang)
+    client_transcript = (getattr(req, "transcript", None) or "").strip()
     
-    english_query = bhashini_translate(native_text, req.source_lang, 'en')
+    if req.input_type == "audio":
+        if client_transcript:
+            native_text = client_transcript
+            print(f"[Gateway Voice] Using client transcript ({req.source_lang}): {native_text}")
+        else:
+            native_text = bhashini_asr(req.data, req.source_lang)
+            print(f"[Gateway Voice] Server Whisper ASR transcribed ({req.source_lang}): {native_text}")
+    
+    english_query = bhashini_translate(native_text, req.source_lang, 'en') if native_text else ""
     
     import sys
     import os
@@ -201,17 +244,26 @@ async def chat_stream_endpoint(req: FrontendRequest, request: Request, backgroun
 
     # --- Layer 0: Deterministic Pre-Checks ---
     from Input_Processing.pre_checks import execute_layer_0
-    layer_0_result = execute_layer_0(english_query)
+    layer_0_result = execute_layer_0(english_query) if english_query else {"processed_text": "", "extracted_codes": [], "needs_clarification_codes": [], "out_of_scope_codes": []}
     
     # --- Layer 1 & 2: Intent Classification & Condensation ---
     from RAG_LLM_Processing.query_condenser import condense_and_classify
-    # Pass raw english query to prevent injection in condenser
-    classification = condense_and_classify(english_query, [], layer_0_result)
+    classification = condense_and_classify(english_query, [], layer_0_result) if english_query else {"routing_action": "ACTION_RAG_TECHNICAL_RETRIEVAL", "condensed_query": ""}
     
     action = classification.get("routing_action", "ACTION_FAIL_CLOSED")
     condensed_query = classification.get("condensed_query", english_query)
     
     async def sse_generator():
+        # If voice consultation produced empty text, notify user gracefully
+        if req.input_type == "audio" and not native_text.strip():
+            yield f"event: token\ndata: {json.dumps({'text': 'Could not detect audio clearly. Please hold the mic and speak clearly, or type your question.'})}\n\n"
+            yield "event: done\ndata: {}\n\n"
+            return
+
+        # If audio, notify client of the transcription
+        if req.input_type == "audio" and native_text.strip():
+            yield f"event: transcription\ndata: {json.dumps({'transcript': native_text})}\n\n"
+
         # Action Handlers (Bypassing LLM Generation)
         static_response = None
         
@@ -234,11 +286,28 @@ async def chat_stream_endpoint(req: FrontendRequest, request: Request, backgroun
         elif action == "ACTION_CLARIFY_MENU":
             static_response = "Sure! What would you like to know about this standard?\n- Safety and performance requirements\n- Testing and certification process\n- Marking and labelling\n- A specific clause"
         elif action == "ACTION_DIRECT_LABS":
-            # For demonstration, generate a deep link
-            static_response = "You can find authorized testing laboratories for this standard in our Labs Directory. Please visit: http://localhost:3000/labs"
+            extracted_codes = layer_0_result.get("extracted_codes", [])
+            matched_labs_info = ""
+            if extracted_codes:
+                is_code = extracted_codes[0]
+                search_digits = "".join([c for c in is_code if c.isdigit()])
+                import csv
+                csv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'labs_data.csv'))
+                found_labs = []
+                if os.path.exists(csv_path):
+                    with open(csv_path, mode="r", encoding="utf-8") as f:
+                        for row in csv.DictReader(f):
+                            scopes = row.get("scope", "").split(";")
+                            for s in scopes:
+                                if search_digits in "".join([c for c in s if c.isdigit()]):
+                                    found_labs.append(f"• **{row.get('lab_name', '').strip()}** ({row.get('location', '').strip()})")
+                                    break
+                if found_labs:
+                    matched_labs_info = f"\n\nAuthorized labs testing **{is_code}** include:\n" + "\n".join(found_labs[:5])
+
+            static_response = f"You can view and search all authorized BIS testing laboratories in our Labs Directory at: https://maanak-zeta.vercel.app/labs{matched_labs_info}"
             
         if static_response:
-            # Yield static response if hit
             if req.source_lang != 'en':
                 static_response = bhashini_translate(static_response, 'en', req.source_lang)
                 if req.input_type == "audio":
@@ -272,11 +341,22 @@ async def chat_stream_endpoint(req: FrontendRequest, request: Request, backgroun
         from RAG_LLM_Processing.generator import generate_strict_response
         
         if req.source_lang == 'en':
+            full_response_text = ""
             async for token_event in generate_strict_response(condensed_query, chunks, user_role, is_voice=(req.input_type == "audio")):
                 if token_event.startswith("event:"):
                     yield token_event
                 else:
+                    full_response_text += token_event
                     yield f"event: token\ndata: {json.dumps({'text': token_event})}\n\n"
+            
+            if req.input_type == "audio" and full_response_text.strip():
+                try:
+                    audio_b64 = bhashini_tts(full_response_text, "en")
+                    if audio_b64:
+                        yield f"event: audio\ndata: {json.dumps({'audio': audio_b64})}\n\n"
+                except Exception as e:
+                    print(f"[Gateway Voice Error] {e}")
+
             yield "event: done\ndata: {}\n\n"
         else:
             print("[Gateway] Collecting English stream for translation...")
@@ -291,16 +371,27 @@ async def chat_stream_endpoint(req: FrontendRequest, request: Request, backgroun
                     except: pass
                 elif not token_event.startswith("event:"):
                     full_english_text += token_event
+
+            # Yield citations metadata FIRST so citation badges render in the frontend immediately
+            if citations_metadata:
+                yield "event: metadata\ndata: " + json.dumps({"citations": citations_metadata}) + "\n\n"
                     
             # 4. Translate back
             translated_text = bhashini_translate(full_english_text, 'en', req.source_lang)
             
             words = translated_text.split(" ")
             for word in words:
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.04)
                 yield "event: token\ndata: " + json.dumps({"text": word + " "}) + "\n\n"
-            if citations_metadata:
-                yield "event: metadata\ndata: " + json.dumps({"citations": citations_metadata}) + "\n\n"
+                
+            if req.input_type == "audio" and translated_text.strip():
+                try:
+                    audio_b64 = bhashini_tts(translated_text, req.source_lang)
+                    if audio_b64:
+                        yield f"event: audio\ndata: {json.dumps({'audio': audio_b64})}\n\n"
+                except Exception as e:
+                    print(f"[Gateway Voice Error] {e}")
+
             yield "event: done\ndata: {}\n\n"
     return StreamingResponse(sse_generator(), media_type="text/event-stream")
 

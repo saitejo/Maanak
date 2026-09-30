@@ -139,11 +139,12 @@ export function ChatShell() {
     isRecording,
     recordingDuration,
     isProcessing: isAudioProcessing,
+    transcript: liveTranscript,
     error: recorderError,
     startRecording,
     stopRecording,
     cancelRecording,
-  } = useAudioRecorder();
+  } = useAudioRecorder(selectedLang);
 
   const effectiveRole: UserRole = roleOverride === "auth" ? authRole : roleOverride as UserRole;
   const active = sessions.find((session) => session.id === activeId) ?? sessions[0];
@@ -180,6 +181,7 @@ export function ChatShell() {
     inputType: "text" | "audio";
     data: string;
     displayText: string;
+    transcript?: string;
   }) {
     if (!active || sending) return;
 
@@ -224,8 +226,39 @@ export function ChatShell() {
         data: params.data,
         sourceLang: selectedLang,
         role: effectiveRole,
+        transcript: params.transcript,
         signal: abortControllerRef.current.signal,
         handlers: {
+          onTranscription: (serverTranscript) => {
+            if (serverTranscript) {
+              patchActive((session) => ({
+                ...session,
+                messages: session.messages.map((m) =>
+                  m.id === userMessage.id
+                    ? { ...m, content: serverTranscript }
+                    : m,
+                ),
+              }));
+            }
+          },
+          onAudio: (audioBase64) => {
+            patchActive((session) => ({
+              ...session,
+              messages: session.messages.map((m) =>
+                m.id === assistantId
+                  ? { ...m, audioBase64 }
+                  : m,
+              ),
+            }));
+            if (params.inputType === "audio" && audioBase64) {
+              try {
+                const snd = new Audio(`data:audio/mp3;base64,${audioBase64}`);
+                snd.play().catch((err) => console.log("[Autoplay blocked]", err));
+              } catch (e) {
+                console.log("[Audio playback error]", e);
+              }
+            }
+          },
           onToken: (chunk) => {
             patchActive((session) => ({
               ...session,
@@ -300,20 +333,46 @@ export function ChatShell() {
     });
   }
 
-  async function handleMicPress() {
+  const micDownTimeRef = useRef<number>(0);
+
+  async function handleToggleRecording() {
     if (sending || isAudioProcessing) return;
-    await startRecording();
+    if (isRecording) {
+      const res = await stopRecording();
+      if (res && (res.audioBase64 || res.transcript)) {
+        await executeStream({
+          inputType: "audio",
+          data: res.audioBase64 || "",
+          transcript: res.transcript || "",
+          displayText: res.transcript || `Voice consultation in ${getLanguageName(selectedLang)}`,
+        });
+      }
+    } else {
+      await startRecording();
+    }
   }
 
-  async function handleMicRelease() {
+  async function handleMicMouseDown() {
+    if (sending || isAudioProcessing) return;
+    micDownTimeRef.current = Date.now();
+    if (!isRecording) {
+      await startRecording();
+    }
+  }
+
+  async function handleMicMouseUp() {
     if (!isRecording) return;
-    const base64Audio = await stopRecording();
-    if (base64Audio) {
-      await executeStream({
-        inputType: "audio",
-        data: base64Audio,
-        displayText: `Voice consultation in ${getLanguageName(selectedLang)}`,
-      });
+    const duration = Date.now() - micDownTimeRef.current;
+    if (duration > 500) {
+      const res = await stopRecording();
+      if (res && (res.audioBase64 || res.transcript)) {
+        await executeStream({
+          inputType: "audio",
+          data: res.audioBase64 || "",
+          transcript: res.transcript || "",
+          displayText: res.transcript || `Voice consultation in ${getLanguageName(selectedLang)}`,
+        });
+      }
     }
   }
 
@@ -489,16 +548,22 @@ export function ChatShell() {
                                       : "No response tokens received.")
                                   }
                                   onCitationClick={(inlineCitation) => {
-                                    const matched = message.citations?.find(c =>
-                                      (c.is_number.includes(inlineCitation.is_number) || inlineCitation.is_number.includes(c.is_number)) &&
-                                      (c.clause?.includes(inlineCitation.clause) || inlineCitation.clause?.includes(c.clause))
-                                    ) || message.citations?.find(c => 
-                                      c.is_number.includes(inlineCitation.is_number) || inlineCitation.is_number.includes(c.is_number)
-                                    );
+                                    const inlineDigits = inlineCitation.is_number.replace(/\D/g, "");
+                                    const inlineClClean = (inlineCitation.clause || "").toLowerCase().replace(/[^0-9.]/g, "");
+                                    
+                                    const matched = message.citations?.find(c => {
+                                      const cDigits = c.is_number.replace(/\D/g, "");
+                                      const cCl = (c.clause || (c as any).clause_no || "").toLowerCase().replace(/[^0-9.]/g, "");
+                                      return (cDigits && cDigits === inlineDigits) && (!inlineClClean || cCl.includes(inlineClClean) || inlineClClean.includes(cCl));
+                                    }) || message.citations?.find(c => {
+                                      const cDigits = c.is_number.replace(/\D/g, "");
+                                      return cDigits && cDigits === inlineDigits;
+                                    }) || message.citations?.[0];
+
                                     setActiveCitation({
                                       is_number: inlineCitation.is_number,
                                       clause: inlineCitation.clause,
-                                      page: matched?.page,
+                                      page: matched?.page || 1,
                                       exact_pdf_name: matched?.exact_pdf_name
                                     });
                                   }}
@@ -669,8 +734,10 @@ export function ChatShell() {
                           ))}
                         </SelectContent>
                       </Select>
-                      <span className="hidden sm:inline text-[10px] text-muted-foreground">
-                        {isRecording ? "Listening..." : "Hold mic to speak"}
+                      <span className="hidden sm:inline text-[10px] text-muted-foreground font-medium">
+                        {isRecording
+                          ? `Listening (${recordingDuration}s)... ${liveTranscript ? `"${liveTranscript.slice(0, 22)}..."` : "Tap to send"}`
+                          : "Hold or tap mic to speak"}
                       </span>
                     </div>
 
@@ -681,18 +748,16 @@ export function ChatShell() {
                         size="icon"
                         className={`size-10 rounded-full transition-all select-none touch-none ${
                           isRecording
-                            ? "bg-destructive text-destructive-foreground ring-4 ring-destructive/30"
+                            ? "bg-destructive text-destructive-foreground ring-4 ring-destructive/30 animate-pulse"
                             : "border-none shadow-none bg-muted/30 hover:bg-muted"
                         }`}
-                        onMouseDown={handleMicPress}
-                        onMouseUp={handleMicRelease}
-                        onMouseLeave={() => {
-                          if (isRecording) cancelRecording();
-                        }}
-                        onTouchStart={handleMicPress}
-                        onTouchEnd={handleMicRelease}
+                        onClick={handleToggleRecording}
+                        onMouseDown={handleMicMouseDown}
+                        onMouseUp={handleMicMouseUp}
+                        onTouchStart={handleMicMouseDown}
+                        onTouchEnd={handleMicMouseUp}
                         disabled={sending || isAudioProcessing}
-                        title="Hold to speak in selected language"
+                        title={isRecording ? "Click to send voice message" : "Hold or tap to speak in selected language"}
                       >
                         <Mic className="size-5" />
                       </Button>

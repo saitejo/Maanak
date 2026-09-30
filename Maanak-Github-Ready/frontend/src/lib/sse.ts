@@ -7,10 +7,13 @@ export type StreamChatOptions = {
   data: string; // text string or raw base64 audio
   sourceLang: string; // "en", "hi", "te", etc.
   role?: UserRole;
+  transcript?: string;
   handlers: {
     onToken: (chunk: string) => void;
     onMetadata: (citations: Citation[]) => void;
     onDone: () => void;
+    onAudio?: (audioBase64: string) => void;
+    onTranscription?: (transcript: string) => void;
   };
   signal?: AbortSignal;
 };
@@ -53,6 +56,36 @@ function processSseEvent(
   if (event === "done" || trimmed === "[DONE]") {
     handlers.onDone();
     return true;
+  }
+
+  if (event === "transcription") {
+    try {
+      const parsed = JSON.parse(trimmed);
+      const text = parsed.transcript || parsed.transcription || parsed.text;
+      if (text && handlers.onTranscription) {
+        handlers.onTranscription(text);
+      }
+    } catch {
+      if (handlers.onTranscription && trimmed) {
+        handlers.onTranscription(trimmed);
+      }
+    }
+    return false;
+  }
+
+  if (event === "audio") {
+    try {
+      const parsed = JSON.parse(trimmed);
+      const audio = parsed.audio || parsed.audio_base64;
+      if (audio && handlers.onAudio) {
+        handlers.onAudio(audio);
+      }
+    } catch {
+      if (handlers.onAudio && trimmed) {
+        handlers.onAudio(trimmed);
+      }
+    }
+    return false;
   }
 
   if (event === "metadata") {
@@ -133,6 +166,7 @@ export async function streamChat(options: StreamChatOptions) {
     data: options.data,
     source_lang: options.sourceLang,
     session_id: options.sessionId,
+    transcript: options.transcript || "",
   };
 
   const response = await fetch(endpoint, {
