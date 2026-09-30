@@ -1,0 +1,10 @@
+lab_name,location,scope
+BIS Bengaluru Branch Laboratory (BNBL),"Bengaluru, Karnataka",IS 1165;IS 13428;IS 1417;IS 14543;IS 16102;IS 16333;IS 302;IS 694
+BIS Central Laboratory (CL),"Sahibabad, Uttar Pradesh",IS 10500;IS 1165;IS 1166;IS 1293;IS 13428;IS 1417;IS 14543;IS 16046;IS 16102;IS 16333;IS 1806;IS 2082;IS 302;IS 3854;IS 694;IS 7021;IS 9968
+BIS Eastern Regional Laboratory (ERL),"Kolkata, West Bengal",IS 1165;IS 1293;IS 13428;IS 1417;IS 14543;IS 16333;IS 302;IS 3854;IS 694
+BIS Hyderabad Branch Laboratory (HYBL),"Hyderabad, Telangana",IS 10500;IS 1293;IS 13428;IS 1417;IS 14543
+BIS Jammu & Kashmir Branch Laboratory (JKBL),"Jammu, J&K",IS 10500;IS 1417
+BIS Northern Regional Laboratory (NRL),"Sahibabad / Ghaziabad, UP",IS 10500;IS 1166;IS 1293;IS 13428;IS 1417;IS 14543;IS 16333;IS 1806;IS 2082;IS 302;IS 694;IS 9968
+BIS Patna Branch Laboratory (PBL),"Patna, Bihar",IS 10500;IS 13428;IS 1417;IS 14543
+BIS Southern Regional Laboratory (SRL),"Chennai, Tamil Nadu",IS 10500;IS 1293;IS 13428;IS 1417;IS 14543;IS 2112;IS 302;IS 694
+BIS Western Regional Laboratory (WRL),"Mumbai, Maharashtra",IS 10500;IS 1165;IS 1166;IS 1293;IS 13428;IS 1417;IS 14543;IS 1806;IS 2112;IS 302;IS 3854;IS 694;IS 9968

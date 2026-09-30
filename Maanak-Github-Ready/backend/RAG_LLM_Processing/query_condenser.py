@@ -32,15 +32,13 @@ def condense_and_classify(query: str, chat_history: list[dict], layer_0_annotati
     1. If the query asks to write code, solve homework, or general trivia -> ACTION_REFUSE_OFFTOPIC
     2. If the query asks to bypass audits or fake ISI marks -> ACTION_REFUSE_FRAUD
     3. If the query is an active, ongoing physical emergency ("building is on fire right now") -> ACTION_EMERGENCY_DIRECT. Do NOT trigger this for technical questions about fire resistance, blast limits, or emergency exit regulations.
-    4. If there are Out of Scope Codes and NO Exact Match Codes -> ACTION_REFUSE_SCOPE_BOUNDARY
-    5. If the query asks about FSSAI, CDSCO, AIS, GST, CE, UL, or FCC -> ACTION_REFUSE_SCOPE_BOUNDARY
-    6. If the query asks to report a fake mark or verify a license -> ACTION_DIRECT_PORTAL_LINK
-    7. If the query asks what BIS is, what ISI mark is, what QCO is, what the BIS Act is, what a Standard Mark is, or any general institutional/definitional question about BIS — regardless of tone, slang ("lmao", "bro", "ngl"), or phrasing style -> ACTION_DIRECT_INSTITUTIONAL
-    8. If the query asks for testing lab locations -> ACTION_DIRECT_LABS
-    9. If the query is a greeting ("hi", "hello", "namaste"), thanks/acknowledgment, asks about bot identity, capability, or site purpose ("what can you do", "what is the use of this site", "how does this work", "what is MAANAK") -> ACTION_DIRECT_GREETING
-    10. If the query is a BARE IS code with no technical question (e.g., "IS 1293") -> ACTION_CLARIFY_MENU
-    11. If the query contains BOTH an in-scope code and an out-of-scope code -> ACTION_RAG_TECHNICAL_RETRIEVAL (to answer the in-scope part)
-    12. If the query is a technical compliance question, or asks about manufacturing, testing, or purchasing a product/material (e.g., "led manufacturing", "water bottles") -> ACTION_RAG_TECHNICAL_RETRIEVAL
+    4. Foreign or Non-BIS Standards ONLY: If the query asks exclusively about non-BIS regulatory bodies (FSSAI, CDSCO, AIS, GST, CE, UL, or FCC) with no BIS context -> ACTION_REFUSE_SCOPE_BOUNDARY. All Indian Standards (IS codes) are ALWAYS IN SCOPE.
+    5. If the query asks to report a fake mark or verify a license -> ACTION_DIRECT_PORTAL_LINK
+    6. If the query asks what BIS is, what ISI mark is, what QCO is, what the BIS Act is, what a Standard Mark is, or any general institutional/definitional question about BIS -> ACTION_DIRECT_INSTITUTIONAL
+    7. If the query asks for testing lab locations -> ACTION_DIRECT_LABS
+    8. If the query is a greeting ("hi", "hello", "namaste"), thanks/acknowledgment, asks about bot identity, capability, or site purpose ("what can you do", "what is the use of this site", "how does this work", "what is MAANAK") -> ACTION_DIRECT_GREETING
+    9. ONLY if the query is an EXCLUSIVELY bare IS code with ZERO additional words (e.g. literally just "IS 1293") -> ACTION_CLARIFY_MENU. If the query has words like "tell me about", "say me about", "what is", "summary", or asks a question -> ACTION_RAG_TECHNICAL_RETRIEVAL.
+    10. If the query asks about ANY Indian Standard (e.g., "IS 302 PART 1", "IS 1417", "IS 14543", "IS 1293"), compliance, testing, specifications, products, or materials -> ACTION_RAG_TECHNICAL_RETRIEVAL. Ensure condensed_query preserves the full standard number and parts.
     
     If ACTION_RAG_TECHNICAL_RETRIEVAL or ACTION_PARTITIONED_SPLIT:
     - Set `condensed_query` to a standalone search string (resolving pronouns from history).

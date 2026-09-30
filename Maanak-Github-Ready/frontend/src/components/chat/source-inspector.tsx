@@ -31,18 +31,38 @@ export function SourceInspector({ citation, onClose }: { citation: Citation | nu
 
   try {
     if (!pdfFileName) {
-      const isNum = citation.is_number || "";
-      if (isNum.includes("1293")) pdfFileName = "IS_1293.pdf";
-      else if (isNum.includes("2082")) pdfFileName = "IS_2082.pdf";
-      else if (isNum.includes("16335")) pdfFileName = "16335_2025.pdf";
-      else pdfFileName = isNum.replace(/ /g, '_') + ".pdf";
+      const s = (citation.is_number || "").toUpperCase();
+      if (s.includes("302")) {
+        const partMatch = s.match(/PART\s*(\d+)/);
+        const secMatch = s.match(/SEC(?:TION)?\s*(\d+)/);
+        if (partMatch && partMatch[1] === "2" && secMatch) {
+          pdfFileName = `IS_302(PART2)SEC${secMatch[1]}.pdf`;
+        } else if (partMatch && partMatch[1] === "2") {
+          pdfFileName = "IS_302(PART2)SEC2.pdf";
+        } else {
+          pdfFileName = "IS_302(PART1).pdf";
+        }
+      } else if (s.includes("16102")) {
+        pdfFileName = (s.includes("PART 2") || s.includes("PART2")) ? "IS_16102(PART2).pdf" : "IS_16102(PART1).pdf";
+      } else if (s.includes("9968")) {
+        pdfFileName = (s.includes("PART 2") || s.includes("PART2")) ? "IS_9968(PART2).pdf" : "IS_9968(PART1).pdf";
+      } else if (s.includes("16333")) {
+        pdfFileName = (s.includes("PART 3") || s.includes("PART3")) ? "IS_16333(PART3).pdf" : "IS_16333(PART1).pdf";
+      } else if (s.includes("16335")) {
+        pdfFileName = "IS-16335-2025.pdf";
+      } else {
+        const digits = s.match(/\d+/);
+        pdfFileName = digits ? `IS_${digits[0]}.pdf` : `${s.replace(/ /g, '_')}.pdf`;
+      }
     }
     
     // Strip chunking suffixes like _part1 or _sec2 from the clause string
-    const cleanClause = (citation.clause || '').split('_')[0];
+    const rawClause = citation.clause || (citation as any).clause_no || "";
+    const cleanClause = rawClause.split('_')[0].replace(/^clause\s*/i, '').trim();
+    const pageNumber = citation.page || (citation as any).page_number || 1;
     
     // view=FitH zooms the PDF to fit the width, navpanes=0 hides the PDF sidebar
-    pdfUrl = `/pdfs/${pdfFileName}#page=${citation.page || 1}&view=FitH&navpanes=0&search="${cleanClause}"`;
+    pdfUrl = `/pdfs/${pdfFileName}#page=${pageNumber}&view=FitH&navpanes=0&search="${cleanClause}"`;
   } catch (error) {
     console.error("Citation error:", error);
     pdfUrl = "error";
@@ -51,6 +71,10 @@ export function SourceInspector({ citation, onClose }: { citation: Citation | nu
   if (pdfUrl === "error") {
     return <div className="p-4 text-red-500">Error rendering citation data.</div>;
   }
+
+  const rawClause = citation.clause || (citation as any).clause_no || "";
+  const cleanClause = rawClause.split('_')[0].replace(/^clause\s*/i, '').trim();
+  const pageNumber = citation.page || (citation as any).page_number || 1;
 
   return (
     <div className="flex h-full w-full max-w-full flex-col bg-background overflow-hidden relative">
@@ -72,7 +96,7 @@ export function SourceInspector({ citation, onClose }: { citation: Citation | nu
           {citation.is_number}
         </h2>
         <p className="text-xs text-muted-foreground mt-0.5">
-          Displaying PDF document containing Clause {citation.clause} on Page {citation.page || 1}.
+          Displaying PDF document containing Clause {cleanClause || "referenced"} on Page {pageNumber}.
         </p>
       </div>
 

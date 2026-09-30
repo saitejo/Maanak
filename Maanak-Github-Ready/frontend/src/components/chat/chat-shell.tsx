@@ -489,9 +489,17 @@ export function ChatShell() {
                                       : "No response tokens received.")
                                   }
                                   onCitationClick={(inlineCitation) => {
+                                    const matched = message.citations?.find(c =>
+                                      (c.is_number.includes(inlineCitation.is_number) || inlineCitation.is_number.includes(c.is_number)) &&
+                                      (c.clause?.includes(inlineCitation.clause) || inlineCitation.clause?.includes(c.clause))
+                                    ) || message.citations?.find(c => 
+                                      c.is_number.includes(inlineCitation.is_number) || inlineCitation.is_number.includes(c.is_number)
+                                    );
                                     setActiveCitation({
                                       is_number: inlineCitation.is_number,
                                       clause: inlineCitation.clause,
+                                      page: matched?.page,
+                                      exact_pdf_name: matched?.exact_pdf_name
                                     });
                                   }}
                                 />
@@ -507,14 +515,18 @@ export function ChatShell() {
                               </p>
                               <div className="flex flex-wrap gap-2">
                                 {message.citations.map((citation, index) => {
+                                  const displayClause = citation.clause || (citation as any).clause_no || "";
                                   const isSelected =
                                     activeCitation?.is_number === citation.is_number &&
-                                    activeCitation?.clause === citation.clause;
+                                    (activeCitation?.clause === citation.clause || activeCitation?.clause === displayClause);
                                   return (
                                     <button
-                                      key={`${citation.is_number}-${citation.clause}-${index}`}
+                                      key={`${citation.is_number}-${displayClause}-${index}`}
                                       type="button"
-                                      onClick={() => setActiveCitation(citation)}
+                                      onClick={() => setActiveCitation({
+                                        ...citation,
+                                        clause: displayClause
+                                      })}
                                       className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-semibold transition-all ${
                                         isSelected
                                           ? "border-red-600 bg-red-600 text-white shadow-xs"
@@ -523,7 +535,7 @@ export function ChatShell() {
                                     >
                                       <ShieldCheck className={`size-3.5 shrink-0 ${isSelected ? "text-white" : "text-emerald-600 dark:text-emerald-400"}`} />
                                       <span className="whitespace-nowrap">
-                                        {citation.is_number} · Clause {citation.clause}
+                                        {citation.is_number} · Clause {displayClause}
                                       </span>
                                     </button>
                                   );

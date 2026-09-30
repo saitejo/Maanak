@@ -68,25 +68,21 @@ If MANUFACTURER:
 {voice_constraint}
 
 ══════════════════════════════════════════
-§2 — FRAMING, NOT FACTS (ANTI-HALLUCINATION)
+§2 — GROUNDED ANSWERING & SYNTHESIS (ANTI-HALLUCINATION)
 ══════════════════════════════════════════
-- Context is the ONLY source of technical truth. Never add technical facts, limits, or test lists that are not in <context_chunks>.
-- If the role block requires a fact you were not given in the chunks, state exactly: "Not available in indexed data, please confirm with BIS."
-- NEVER say "in total you need X, Y, Z" unless that full exhaustive list is explicitly in the context for this product. Otherwise say what the indexed standard requires and note that "other requirements may apply".
-- Use the provided <institutional_facts> to explain how to verify marks or report issues.
-- NEVER use real-looking clause numbers or limits in your examples (Use placeholders like <STANDARD>, <CLAUSE>, <VALUE> only if giving an example).
-- NO CALCULATIONS: Do NOT perform mathematical calculations for the user (e.g. converting 5% to a fixed mm). Provide the exact text of the standard (e.g., '±5% of nominal length').
-- TABULAR DATA: If extracting from a table, explicitly state the column and row context (e.g., "For Class B, 50mm pipes..."). Do not mix rows.
-- VERSIONS: Always cite the specific Edition/Year of the standard you are extracting from if available.
-- NO INFERRED CAUSALITY: Do not infer causality. If Clause A and Clause B are retrieved, state them independently unless the text explicitly connects them.
-- NEGATION / EXCLUSIONS: Pay extreme attention to words like NOT, EXCEPT, and ONLY. If asked what is NOT allowed, verify the text explicitly states it is prohibited, rather than just omitting it from an allowed list.
+- Context is the authoritative source of technical truth. Never invent technical specifications, test limits, or clause numbers not found in <context_chunks>.
+- BROAD & OVERVIEW QUESTIONS: If the user asks for an overview, summary, or general details about a standard or product (e.g. "tell me about IS 302 PART 1", "what does IS 14543 cover"), intelligently synthesize the scope, primary safety/performance requirements, and key provisions found in <context_chunks>. Explain what the standard covers, citing the retrieved clauses.
+- SPECIFIC TECHNICAL QUESTIONS: Provide exact clauses, parameters, and testing criteria directly from <context_chunks>.
+- If a specific required parameter is not mentioned in the chunks, state: "Not specified in the retrieved clauses, please confirm with BIS."
+- Use the provided <institutional_facts> for BIS verification app and portal reporting procedures.
+- TABULAR & NUMERICAL DATA: Provide the exact text of the standard. Do not invent arbitrary numbers.
 
 ══════════════════════════════════════════
 §3 — DISCLAIMERS & CITATIONS
 ══════════════════════════════════════════
 - State this disclaimer EXACTLY ONCE per answer: "Official compliance is decided by BIS / an authorized lab."
-- You MUST format citations exactly as [IS Number -> Clause Number] at the end of every relevant sentence. DO NOT use [IS Number: Clause Number].
-- CRITICAL RULE: If the <context_chunks> provided below do not contain the answer, or if there are no chunks, you MUST respond ONLY with the exact string: "This information is not currently available in the indexed standards." Do not append a role block, do not try to answer using general knowledge, and do not use the institutional facts to answer.
+- You MUST format citations exactly as [IS Number -> Clause Number] at the end of every relevant sentence (e.g. [IS 302 (Part 1) -> Clause 1.1] or [IS 14543 -> Clause 4.1]). DO NOT use [IS Number: Clause Number].
+- FALLBACK: ONLY if <context_chunks> is completely empty, or contains content completely irrelevant to the requested topic/standard, respond ONLY with: "This information is not currently available in the indexed standards." Do not append a role block if this happens.
 
 {institutional_facts}
 
@@ -121,25 +117,65 @@ If MANUFACTURER:
                 return
                 
             # 2. Extract Citations
-            raw_citations = re.findall(r'\[(IS\s+[^>]+)\s*->\s*Clause\s*([^\]]+)\]', full_response, re.IGNORECASE)
+            raw_citations = re.findall(r'\[\s*(IS\s*[^\]\-:>]+?)\s*(?:->|:)\s*(?:Clause\s*)?([^\]]+?)\s*\]', full_response, re.IGNORECASE)
             valid_citations = []
             for is_num, clause in raw_citations:
-                is_num = is_num.strip()
-                clause = clause.strip()
-                valid_citations.append((is_num, clause))
+                valid_citations.append((is_num.strip(), clause.strip()))
             citations = valid_citations
-            # Relaxed verifier to prevent false positives
 
             # Yield metadata ONLY for explicitly cited chunks, and NEVER if the info is not available.
             is_not_available = "not currently available" in full_response.lower()
             citations_metadata = []
             
             if not is_not_available and citations:
-                unique_cits = list(set([(i.strip(), c.strip()) for i, c in citations]))
+                unique_cits = list(set(citations))
                 for is_num, clause in unique_cits:
+                    matched_page = 1
+                    is_digits = "".join([d for d in is_num if d.isdigit()])
+                    clean_clause = clause.lower().replace("clause", "").strip()
+                    
+                    for c in retrieved_chunks:
+                        c_is = str(c.get('is_number', '')).strip().lower()
+                        c_cl = str(c.get('clause_no', '')).strip().lower()
+                        c_digits = "".join([d for d in c_is if d.isdigit()])
+                        
+                        if is_digits and (is_digits == c_digits or is_digits in c_digits):
+                            c_cl_clean = c_cl.replace("clause", "").strip()
+                            if clean_clause and (clean_clause in c_cl_clean or c_cl_clean in clean_clause):
+                                matched_page = c.get('page_number') or c.get('page') or 1
+                                break
+                            elif matched_page == 1 and (c.get('page_number') or c.get('page')):
+                                matched_page = c.get('page_number') or c.get('page')
+
+                    s_upper = is_num.upper()
+                    if "302" in s_upper:
+                        part_m = re.search(r'PART\s*(\d+)', s_upper)
+                        sec_m = re.search(r'SEC(?:TION)?\s*(\d+)', s_upper)
+                        if part_m and part_m.group(1) == "2" and sec_m:
+                            matched_pdf = f"IS_302(PART2)SEC{sec_m.group(1)}.pdf"
+                        elif part_m and part_m.group(1) == "2":
+                            matched_pdf = "IS_302(PART2)SEC2.pdf"
+                        else:
+                            matched_pdf = "IS_302(PART1).pdf"
+                    elif "16102" in s_upper:
+                        matched_pdf = "IS_16102(PART2).pdf" if ("PART 2" in s_upper or "PART2" in s_upper) else "IS_16102(PART1).pdf"
+                    elif "9968" in s_upper:
+                        matched_pdf = "IS_9968(PART2).pdf" if ("PART 2" in s_upper or "PART2" in s_upper) else "IS_9968(PART1).pdf"
+                    elif "16333" in s_upper:
+                        matched_pdf = "IS_16333(PART3).pdf" if ("PART 3" in s_upper or "PART3" in s_upper) else "IS_16333(PART1).pdf"
+                    elif "16335" in s_upper:
+                        matched_pdf = "IS-16335-2025.pdf"
+                    elif is_digits:
+                        matched_pdf = f"IS_{is_digits}.pdf"
+                    else:
+                        matched_pdf = is_num.replace(" ", "_") + ".pdf"
+
                     citations_metadata.append({
                         "is_number": is_num,
+                        "clause": clause,
                         "clause_no": clause,
+                        "page": int(matched_page) if matched_page else 1,
+                        "exact_pdf_name": matched_pdf,
                         "link": f"https://standardsbis.bsbedge.com/"
                     })
             

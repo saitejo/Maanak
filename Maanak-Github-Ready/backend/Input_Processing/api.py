@@ -102,10 +102,42 @@ def fallback_gtts(text: str, target_lang: str) -> str:
         import base64
         import urllib.parse
         import httpx
-        url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={urllib.parse.quote(text)}&tl={target_lang[:2]}&client=tw-ob"
-        response = httpx.get(url, timeout=10.0)
-        response.raise_for_status()
-        return base64.b64encode(response.content).decode("utf-8")
+        import re
+
+        clean_text = re.sub(r'\[.*?\]', '', text)
+        clean_text = re.sub(r'[*_#`~>]+', ' ', clean_text)
+        clean_text = re.sub(r'\s+', ' ', clean_text).strip()
+        if not clean_text:
+            return ""
+
+        sentences = re.split(r'([.?!,;\n]+)', clean_text)
+        chunks = []
+        current = ""
+        for s in sentences:
+            if len(current) + len(s) < 100:
+                current += s
+            else:
+                if current.strip():
+                    chunks.append(current.strip())
+                current = s
+        if current.strip():
+            chunks.append(current.strip())
+
+        lang = (target_lang or "en")[:2].lower()
+        combined_bytes = bytearray()
+        with httpx.Client(timeout=10.0) as client:
+            for chunk in chunks:
+                if not chunk.strip():
+                    continue
+                url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={urllib.parse.quote(chunk)}&tl={lang}&client=tw-ob"
+                resp = client.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+                if resp.status_code == 200:
+                    combined_bytes.extend(resp.content)
+
+        if not combined_bytes:
+            return ""
+
+        return base64.b64encode(combined_bytes).decode("utf-8")
     except Exception as e:
         print(f"[Native TTS] Error: {e}")
         return ""
@@ -216,6 +248,7 @@ async def chat_stream_endpoint(req: FrontendRequest, request: Request, backgroun
             chunk_size = 20
             for i in range(0, len(static_response), chunk_size):
                 yield f"event: token\ndata: {json.dumps({'text': static_response[i:i+chunk_size]})}\n\n"
+            yield "event: done\ndata: {}\n\n"
             return
             
         # --- Layer 3: Retrieval (If Technical Query) ---
@@ -228,7 +261,7 @@ async def chat_stream_endpoint(req: FrontendRequest, request: Request, backgroun
 
             original_cwd = os.getcwd()
             os.chdir(rag_pipeline_path)
-            chunks = await get_relevant_clauses(condensed_query, top_k=3)
+            chunks = await get_relevant_clauses(condensed_query, top_k=5)
             os.chdir(original_cwd)
         except Exception as e:
             print(f"Error getting chunks from RAG guy: {e}")
@@ -278,62 +311,31 @@ async def tts_endpoint(request: TTSRequest):
 
 @app.get("/api/v1/labs")
 async def get_labs_endpoint(is_code: str = ""):
+    import csv
     is_code = is_code.upper().strip()
     search_code = "".join([c for c in is_code if c.isdigit()])
     
-    database_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'Maanak_database'))
-    
-    if not os.path.exists(database_dir):
-        # Dynamic Mock labs for Render deployment
-        mock_code = f"IS {search_code}" if search_code else "IS 1293"
-        return [
-            {"lab_name": "BIS Central Laboratory", "location": "Sahibabad", "scope": [mock_code, "IS 302", "IS 16046"]},
-            {"lab_name": "ERTL (North)", "location": "New Delhi", "scope": [mock_code, "IS 13252"]},
-            {"lab_name": "National Test House", "location": "Kolkata", "scope": [mock_code]}
-        ]
-        
-    lab_map = {}
-    for filename in os.listdir(database_dir):
-        if not filename.endswith(".pdf") or "LABS" in filename or "LIMS" in filename:
-            continue
-            
-        parts = filename.replace(".pdf", "").split("_")
-        if len(parts) >= 2:
-            lab_name_raw = parts[0]
-            code_part = parts[1]
-            if code_part.startswith("PART") or code_part == "scope":
-                continue
-                
-            if lab_name_raw not in lab_map:
-                lab_map[lab_name_raw] = set()
-            lab_map[lab_name_raw].add(code_part)
-            
+    csv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'labs_data.csv'))
     labs = []
-    for lab_name_raw, scopes in lab_map.items():
-        if search_code and search_code not in scopes:
-            continue
-            
-        formatted_name = lab_name_raw.replace("Laboratory(", " Laboratory (")
-        formatted_name = formatted_name.replace("Branch", " Branch ").replace("Central", "Central ").replace("Regional", " Regional ")
-        formatted_name = formatted_name.replace("  ", " ").strip()
-        
-        location = "India"
-        if "Bengaluru" in formatted_name: location = "Bengaluru"
-        elif "Central" in formatted_name: location = "Sahibabad"
-        elif "Eastern" in formatted_name: location = "Kolkata"
-        elif "Northern" in formatted_name: location = "Mohali"
-        elif "Southern" in formatted_name: location = "Chennai"
-        elif "Western" in formatted_name: location = "Mumbai"
-        elif "Patna" in formatted_name: location = "Patna"
-        elif "Hyderabad" in formatted_name: location = "Hyderabad"
-        elif "Jammu" in formatted_name: location = "Jammu & Kashmir"
-        
-        labs.append({
-            "lab_name": formatted_name,
-            "location": location,
-            "scope": [f"IS {code}" for code in sorted(list(scopes))]
-        })
-        
+    
+    if os.path.exists(csv_path):
+        with open(csv_path, mode="r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                scopes = [s.strip() for s in row.get("scope", "").split(";") if s.strip()]
+                if search_code:
+                    matched = False
+                    for s in scopes:
+                        if search_code in "".join([c for c in s if c.isdigit()]):
+                            matched = True
+                            break
+                    if not matched:
+                        continue
+                labs.append({
+                    "lab_name": row.get("lab_name", "").strip(),
+                    "location": row.get("location", "").strip(),
+                    "scope": scopes
+                })
     return labs
 
 if __name__ == "__main__":

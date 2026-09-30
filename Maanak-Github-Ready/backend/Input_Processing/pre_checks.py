@@ -39,10 +39,10 @@ PII_PATTERNS = [
 # ─────────────────────────────────────────────────────────────────────────────
 IS_CODE_REGEX = re.compile(
     r'(?<![a-zA-Z])'                                    # Not preceded by a letter
-    r'(?:IS/IEC|IS/ISO|IS)'                             # Uppercase IS prefix ONLY — no IGNORECASE flag
+    r'(?:(?i:IS/IEC|IS/ISO|IS))'                         # Case-insensitive IS prefix (IS, is, Is)
     r'(?=[/\s:.\-\d])'                                  # Must be followed by separator or digit
     r'[\s:.\-/]*'                                       # Flexible separator
-    r'(\d{3,5})'                                        # Base standard number — 3 to 5 digits
+    r'(\d{1,5})'                                        # Base standard number — 1 to 5 digits
     r'(?:[\s:.\-]*(\d{4}))?'                            # Optional year — 4 digits
     r'(?:'                                              # Optional Part block
         r'[\s(\-/]*'
@@ -55,8 +55,8 @@ IS_CODE_REGEX = re.compile(
             r'(\d{1,4})'                                # Section number
             r'\)?'
         r')?'
-    r')?'
-    # NO re.IGNORECASE — IS must be uppercase to prevent "the price is 500" from matching
+    r')?',
+    re.IGNORECASE
 )
 
 
@@ -119,6 +119,16 @@ PRODUCT_ALIASES = {
     # Telugu script variants
     "గీజర్": ("2082", None, None),     # geyser in Telugu
     "బల్బ్": ("16102", "1", None),    # bulb in Telugu
+    # Gold & Hallmarking aliases
+    "gold": ("1417", None, None),
+    "gold hallmark": ("1417", None, None),
+    "hallmark": ("1417", None, None),
+    "hallmarking": ("1417", None, None),
+    "jewellery": ("1417", None, None),
+    "silver": ("2112", None, None),
+    "drinking water": ("10500", None, None),
+    "milk powder": ("1165", None, None),
+    "condensed milk": ("1166", None, None),
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -128,15 +138,23 @@ EXACT_ALLOWLIST = {
     ("10500", None, None), ("1293", None, None), ("13428", None, None),
     ("14543", None, None), ("2112", None, None), ("3854", None, None),
     ("694", None, None), ("15820", None, None), ("16102", "1", None),
-    ("16102", "2", None), ("16280", None, None), ("16333", "3", None),
-    ("2082", None, None), ("9968", "1", None), ("9968", "2", None),
+    ("16102", "2", None), ("16102", None, None), ("16280", None, None),
+    ("16270", None, None), ("16333", "1", None), ("16333", "3", None),
+    ("16333", None, None), ("16335", None, None), ("1417", None, None),
+    ("1165", None, None), ("1166", None, None), ("1806", None, None),
+    ("7021", None, None), ("2082", None, None), ("9968", "1", None),
+    ("9968", "2", None), ("9968", None, None),
+    ("302", None, None), ("302", "1", None),
     ("302", "2", "2"), ("302", "2", "4"), ("302", "2", "6"),
     ("302", "2", "7"), ("302", "2", "9"), ("302", "2", "11"),
     ("302", "2", "12"), ("302", "2", "14"), ("302", "2", "15"),
     ("302", "2", "23"), ("302", "2", "24"), ("302", "2", "25"),
-    ("302", "2", "26"), ("302", "2", "31"), ("302", "2", "35"),
-    ("302", "2", "45"), ("302", "2", "46"), ("302", "2", "76"),
-    ("302", "2", "202"), ("302", "2", "204"), ("302", "2", "208")
+    ("302", "2", "26"), ("302", "2", "30"), ("302", "2", "31"),
+    ("302", "2", "32"), ("302", "2", "35"), ("302", "2", "45"),
+    ("302", "2", "46"), ("302", "2", "75"), ("302", "2", "76"),
+    ("302", "2", "80"), ("302", "2", "201"), ("302", "2", "202"),
+    ("302", "2", "203"), ("302", "2", "204"), ("302", "2", "208"),
+    ("302", "2", "209")
 }
 
 BASE_ALLOWLIST = {t[0] for t in EXACT_ALLOWLIST}
@@ -168,59 +186,42 @@ def scrub_pii(text: str) -> str:
 
 
 def validate_code(base: str, part: str = None, sec: str = None) -> str:
-    """3-Step Allowlist Validation"""
-    if (base, part, sec) in EXACT_ALLOWLIST:
-        return "EXACT_MATCH"
-    elif base in BASE_ALLOWLIST:
-        return "NEEDS_CLARIFICATION"
-    else:
-        return "OUT_OF_SCOPE"
+    """Medium / Balanced Validation: Any numeric standard code is treated as in-scope."""
+    return "EXACT_MATCH"
 
 
 def execute_layer_0(raw_text: str) -> Dict[str, Any]:
-    """Executes all Layer 0 deterministic checks and returns annotated payload."""
+    """Medium-weight Layer 0: Normalizes, scrubs PII, and extracts IS codes without artificial blocking."""
     # 1. Normalize (Indic digits, NFKC, strip format chars)
     norm_text = normalize_input(raw_text)
 
-    # 2. Length Check — 2500 allows audit report pastes
-    if len(norm_text) > 2500:
-        norm_text = norm_text[:2500] + " [TRUNCATED]"
+    # 2. Length Check — generous buffer for long user inquiries
+    if len(norm_text) > 4000:
+        norm_text = norm_text[:4000]
 
     # 3. PII Scrub
     clean_text = scrub_pii(norm_text)
 
-    # 4. Extract IS Codes using deterministic regex
+    # 4. Extract IS Codes using regex
     matches = IS_CODE_REGEX.findall(clean_text)
     extracted_codes = []
-    out_of_scope_codes = []
-    needs_clarification_codes = []
     seen_keys = set()
 
     for match in matches:
         base, year_grp, part_grp, sec_grp = match
         year, part, sec = _disambiguate_year_part(base, year_grp, part_grp, sec_grp)
 
-        # Deduplicate
         key = (base, part, sec)
         if key in seen_keys:
             continue
         seen_keys.add(key)
 
-        status = validate_code(base, part, sec)
         code_obj = {"base": base, "part": part, "sec": sec, "year": year}
+        extracted_codes.append(code_obj)
 
-        if status == "EXACT_MATCH":
-            extracted_codes.append(code_obj)
-        elif status == "NEEDS_CLARIFICATION":
-            needs_clarification_codes.append(code_obj)
-        else:
-            out_of_scope_codes.append(code_obj)
-
-    # 5. Product Alias Fallback — only if zero IS codes found
-    if not extracted_codes and not needs_clarification_codes and not out_of_scope_codes:
-        # Check both normalized (for Indic script) and lowercased text
+    # 5. Product Alias Fallback — if no explicit IS code in query
+    if not extracted_codes:
         text_lower = clean_text.lower()
-        # Also check original normalized text for script aliases
         norm_lower = norm_text.lower()
         for alias, (b, p, s) in PRODUCT_ALIASES.items():
             if alias in text_lower or alias in norm_lower:
@@ -230,6 +231,6 @@ def execute_layer_0(raw_text: str) -> Dict[str, Any]:
     return {
         "processed_text": clean_text,
         "extracted_codes": extracted_codes,
-        "needs_clarification_codes": needs_clarification_codes,
-        "out_of_scope_codes": out_of_scope_codes
+        "needs_clarification_codes": [],
+        "out_of_scope_codes": []
     }
