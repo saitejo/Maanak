@@ -33,20 +33,20 @@ async def get_hf_embedding(text: str) -> list[float]:
     url = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
     headers = {"Authorization": f"Bearer {hf_token}"}
     
-    async with httpx.AsyncClient() as client:
-        # Retry logic just in case the model is waking up
+    def _sync_post():
+        import requests
         for attempt in range(3):
             try:
-                response = await client.post(url, headers=headers, json={"inputs": text}, timeout=20.0)
+                response = requests.post(url, headers=headers, json={"inputs": text}, timeout=20.0)
                 if response.status_code == 200:
                     data = response.json()
-                    # HF sometimes returns [[0.1, 0.2, ...]] instead of [0.1, 0.2, ...]
                     if isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
                         return data[0]
                     return data
                 elif response.status_code == 503:
                     print(f"[HF API] Model loading (503)... retrying {attempt+1}/3")
-                    await asyncio.sleep(2)
+                    import time
+                    time.sleep(2)
                 else:
                     print(f"[HF API] Error {response.status_code}: {response.text}")
                     break
@@ -54,6 +54,8 @@ async def get_hf_embedding(text: str) -> list[float]:
                 print(f"[HF API] Network error: {e}")
                 break
         return []
+
+    return await asyncio.to_thread(_sync_post)
 
 async def get_relevant_clauses(standalone_query: str, top_k: int = 3, alpha: float = 0.5) -> list[dict]:
     """
