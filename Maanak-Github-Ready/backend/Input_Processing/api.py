@@ -99,17 +99,15 @@ def bhashini_translate(text: str, source_lang: str, target_lang: str) -> str:
 
 def fallback_gtts(text: str, target_lang: str) -> str:
     try:
-        import io
         import base64
-        from gtts import gTTS
-        # gTTS uses 2-letter lang codes (e.g., 'en', 'hi')
-        tts = gTTS(text=text, lang=target_lang[:2])
-        fp = io.BytesIO()
-        tts.write_to_fp(fp)
-        fp.seek(0)
-        return base64.b64encode(fp.read()).decode('utf-8')
+        import urllib.parse
+        import httpx
+        url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={urllib.parse.quote(text)}&tl={target_lang[:2]}&client=tw-ob"
+        response = httpx.get(url, timeout=10.0)
+        response.raise_for_status()
+        return base64.b64encode(response.content).decode("utf-8")
     except Exception as e:
-        print(f"[gTTS] Error: {e}")
+        print(f"[Native TTS] Error: {e}")
         return ""
 
 def bhashini_tts(text: str, target_lang: str) -> str:
@@ -246,6 +244,7 @@ async def chat_stream_endpoint(req: FrontendRequest, request: Request, backgroun
                     yield token_event
                 else:
                     yield f"event: token\ndata: {json.dumps({'text': token_event})}\n\n"
+            yield "event: done\ndata: {}\n\n"
         else:
             print("[Gateway] Collecting English stream for translation...")
             full_english_text = ""
@@ -285,11 +284,12 @@ async def get_labs_endpoint(is_code: str = ""):
     database_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'Maanak_database'))
     
     if not os.path.exists(database_dir):
-        # Mock labs for Render deployment (since PDFs are gitignored)
+        # Dynamic Mock labs for Render deployment
+        mock_code = f"IS {search_code}" if search_code else "IS 1293"
         return [
-            {"lab_name": "BIS Central Laboratory", "location": "Sahibabad", "scope": ["IS 1293", "IS 302", "IS 16046"]},
-            {"lab_name": "ERTL (North)", "location": "New Delhi", "scope": ["IS 1293", "IS 13252"]},
-            {"lab_name": "National Test House", "location": "Kolkata", "scope": ["IS 1293"]}
+            {"lab_name": "BIS Central Laboratory", "location": "Sahibabad", "scope": [mock_code, "IS 302", "IS 16046"]},
+            {"lab_name": "ERTL (North)", "location": "New Delhi", "scope": [mock_code, "IS 13252"]},
+            {"lab_name": "National Test House", "location": "Kolkata", "scope": [mock_code]}
         ]
         
     lab_map = {}
